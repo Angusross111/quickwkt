@@ -21,7 +21,7 @@
      </property>
      <widget class="QWidget" name="tab">
       <attribute name="title">
-       <string>WKT/WKB</string>
+       <string>WKT/WKB/Geojson</string>
       </attribute>
       <layout class="QVBoxLayout" name="verticalLayout_2">
        <item>
@@ -32,7 +32,7 @@
          <item>
           <widget class="QLabel" name="addressLabel">
            <property name="text">
-            <string>Enter (E)WKT or WKB or load an example</string>
+            <string>Enter (E)WKT or WKB or Geojson or load an example</string>
            </property>
           </widget>
          </item>

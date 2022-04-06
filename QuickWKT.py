@@ -35,11 +35,13 @@ import os
 import re
 import binascii
 import inspect
-
+import json
+from numbers import Number
 # Import the code for the dialog
 from .QuickWKTDialog import QuickWKTDialog
 
-
+geojsontypes = ["Point", "LineString", "Polygon", "MultiPoint","MultiLineString","MultiPolygon","GeometryCollection","FeatureCollection"]
+unsupportedTypes = ["MultiPoint","MultiLineString","MultiPolygon","GeometryCollection","FeatureCollection"]
 class QuickWKT(object):
 
     def __init__(self, iface):
@@ -89,10 +91,13 @@ class QuickWKT(object):
         # See if OK was pressed
         if result == 1 and self.dlg.wkt.toPlainText():
             text = str(self.dlg.wkt.toPlainText())
+            text = text.strip("\'")
             layerTitle = self.dlg.layerTitle.text() or 'QuickWKT'
             try:
                 if "(" in text:
                     self.save_wkt(text, layerTitle)
+                if "{" in text:
+                    self.save_geojson(text, layerTitle)
                 else:
                     self.save_wkb(text, layerTitle)
             except Exception as e:
@@ -273,6 +278,42 @@ class QuickWKT(object):
                 self.canvas.refresh()
         return layer
 
+    def save_geojson(self, geojson, layerTitle=None):
+   
+        jsonObj = json.loads(geojson)
+        if "type" not in jsonObj:
+            raise Exception("Invalid geojson, does not contain 'type'")
+
+        if jsonObj["type"] not in geojsontypes:
+            raise Exception("Invalid geojson, "+jsonObj["type"]+" is not a valid type")
+
+        if jsonObj["type"] in unsupportedTypes:
+            raise Exception("Unsupported type, "+jsonObj["type"]+" is not supported Yet")
+
+
+        feat = QgsFeature()
+        
+        if jsonObj["type"] == "Point":
+            self.check_point(jsonObj["coordinates"])
+            gPnt = QgsGeometry.fromPointXY(QgsPointXY(jsonObj["coordinates"][0],jsonObj["coordinates"][1]))
+            feat.setGeometry(gPnt)
+        elif jsonObj["type"] == "LineString":
+            self.check_line_string(jsonObj["coordinates"])
+            qgsPoints = [QgsPoint(coord[0], coord[1]) for coord in jsonObj["coordinates"]]
+            gLine = QgsGeometry.fromPolyline(qgsPoints)
+            feat.setGeometry(gLine)
+        elif jsonObj["type"] == "Polygon":
+            self.check_polygon(jsonObj["coordinates"])
+            qgsPoints = [QgsPointXY(coord[0],coord[1])  for coord in jsonObj['coordinates'][0]]
+            gPolygon = QgsGeometry.fromPolygonXY([qgsPoints])
+            feat.setGeometry(gPolygon)
+
+        layer = self.createLayer(jsonObj["type"], layerTitle)
+        layer.dataProvider().addFeatures([feat])
+        layer.updateExtents()
+        layer.reload()
+            
+    
 
     def save_geometry(self, geometry, layerTitle=None):
         """Shows the QgsGeometry in the map canvas, optionally specify a
@@ -285,6 +326,43 @@ class QuickWKT(object):
             print("Error: this is not an instance of QgsGeometry")
             return None
 
+    @staticmethod   
+    def check_point(coord):
+        if not isinstance(coord, list):
+           raise Exception('each position must be a list')
+        if len(coord) not in (2, 3):
+           raise Exception('a position must have exactly 2 or 3 values')
+        for number in coord:
+            if not isinstance(number, Number):
+               raise Exception('a position cannot have inner positions')
+
+    @staticmethod   
+    def check_line_string(coord):
+        if not isinstance(coord, list):
+           raise Exception('each line must be a list of positions')
+        if len(coord) < 2:
+             raise Exception ('the "coordinates" member must be an array of '
+                    'two or more positions')
+        for pos in coord:
+            error = QuickWKT.check_point(pos)
+            if error:
+                 raise Exception( error)
+
+    @staticmethod   
+    def check_polygon(coord):
+        if not isinstance(coord, list):
+           raise Exception('Each polygon must be a list of linear rings')
+
+        if not all(isinstance(elem, list) for elem in coord):
+             raise Exception( "Each element of a polygon's coordinates must be a list")
+
+        lengths = all(len(elem) >= 4 for elem in coord)
+        if lengths is False:
+           raise Exception('Each linear ring must contain at least 4 positions')
+
+        isring = all(elem[0] == elem[-1] for elem in coord)
+        if isring is False:
+           raise Exception('Each linear ring must end where it started')
 
     def getLayer(self, layerId):
         for layer in list(QgsProject.instance().mapLayers().values()):
