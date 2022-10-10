@@ -17,31 +17,32 @@ email                : elpaso@itopen.it
  *                                                                         *
  ***************************************************************************/
 """
-from __future__ import print_function
-from __future__ import absolute_import
-from builtins import str
-from builtins import range
-from builtins import object
+from __future__ import absolute_import, print_function
+
+from builtins import object, range, str
+
 # Import the PyQt and QGIS libraries
 from qgis.PyQt.QtCore import *
 from qgis.PyQt.QtGui import *
+
 try:
     from qgis.PyQt.QtWidgets import *
 except:
     pass
-from qgis.core import *
-
-import os
-import re
 import binascii
 import inspect
 import json
+import os
+import re
 from numbers import Number
+
+from qgis.core import *
+
 # Import the code for the dialog
 from .QuickWKTDialog import QuickWKTDialog
 
 geojsontypes = ["Point", "LineString", "Polygon", "MultiPoint","MultiLineString","MultiPolygon","GeometryCollection","FeatureCollection"]
-unsupportedTypes = ["MultiPoint","MultiLineString","MultiPolygon","GeometryCollection","FeatureCollection"]
+unsupportedTypes = ["MultiPoint","MultiLineString","GeometryCollection","FeatureCollection"]
 class QuickWKT(object):
 
     def __init__(self, iface):
@@ -307,6 +308,16 @@ class QuickWKT(object):
             qgsPoints = [QgsPointXY(coord[0],coord[1])  for coord in jsonObj['coordinates'][0]]
             gPolygon = QgsGeometry.fromPolygonXY([qgsPoints])
             feat.setGeometry(gPolygon)
+        elif jsonObj["type"] == "MultiPolygon":
+            print("")
+            self.check_multi_polygon(jsonObj["coordinates"])
+            multi = []
+            for poly in jsonObj['coordinates']:
+                qgsPoints = [QgsPointXY(coord[0],coord[1])  for coord in poly[0]]
+                # gPolygon = QgsGeometry.fromPolygonXY([qgsPoints])
+                multi.append([qgsPoints])
+            feat.setGeometry(QgsGeometry.fromMultiPolygonXY(multi))
+
 
         layer = self.createLayer(jsonObj["type"], layerTitle)
         layer.dataProvider().addFeatures([feat])
@@ -363,6 +374,14 @@ class QuickWKT(object):
         isring = all(elem[0] == elem[-1] for elem in coord)
         if isring is False:
            raise Exception('Each linear ring must end where it started')
+
+    @staticmethod   
+    def check_multi_polygon(coord):
+        if not isinstance(coord, list):
+           raise Exception('Each polygon must be a list of linear rings')
+
+        for elem in coord:
+            QuickWKT.check_polygon(elem) 
 
     def getLayer(self, layerId):
         for layer in list(QgsProject.instance().mapLayers().values()):
