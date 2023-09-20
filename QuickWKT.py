@@ -42,7 +42,7 @@ from qgis.core import *
 from .QuickWKTDialog import QuickWKTDialog
 
 geojsontypes = ["Point", "LineString", "Polygon", "MultiPoint","MultiLineString","MultiPolygon","GeometryCollection","FeatureCollection"]
-unsupportedTypes = ["MultiPoint","MultiLineString","GeometryCollection","FeatureCollection"]
+unsupportedTypes = ["MultiPoint"]
 class QuickWKT(object):
 
     def __init__(self, iface):
@@ -281,7 +281,12 @@ class QuickWKT(object):
 
     def save_geojson(self, geojson, layerTitle=None):
    
-        jsonObj = json.loads(geojson)
+        jsonObj = geojson if isinstance(geojson,dict) else json.loads(geojson)
+        if("geometry" in jsonObj and "type" in jsonObj["geometry"]):
+            jsonObj = jsonObj["geometry"]
+        if isinstance(jsonObj, list):
+            for geom in jsonObj:
+                self.save_geojson(geom,layerTitle)
         if "type" not in jsonObj:
             raise Exception("Invalid geojson, does not contain 'type'")
 
@@ -292,39 +297,65 @@ class QuickWKT(object):
             raise Exception("Unsupported type, "+jsonObj["type"]+" is not supported Yet")
 
 
-        feat = QgsFeature()
-        
+        # feat = QgsFeature()
+        feat = None
         if jsonObj["type"] == "Point":
             self.check_point(jsonObj["coordinates"])
-            gPnt = QgsGeometry.fromPointXY(QgsPointXY(jsonObj["coordinates"][0],jsonObj["coordinates"][1]))
-            feat.setGeometry(gPnt)
+            feat = QuickWKT.create_qgis_feature(jsonObj)
         elif jsonObj["type"] == "LineString":
             self.check_line_string(jsonObj["coordinates"])
-            qgsPoints = [QgsPoint(coord[0], coord[1]) for coord in jsonObj["coordinates"]]
-            gLine = QgsGeometry.fromPolyline(qgsPoints)
-            feat.setGeometry(gLine)
+            feat = QuickWKT.create_qgis_feature(jsonObj)
+        elif jsonObj["type"] == "MultiLineString":
+            self.check_multi_line_string(jsonObj["coordinates"])
+            feat = QuickWKT.create_qgis_feature(jsonObj)
         elif jsonObj["type"] == "Polygon":
             self.check_polygon(jsonObj["coordinates"])
-            qgsPoints = [QgsPointXY(coord[0],coord[1])  for coord in jsonObj['coordinates'][0]]
-            gPolygon = QgsGeometry.fromPolygonXY([qgsPoints])
-            feat.setGeometry(gPolygon)
+            feat = QuickWKT.create_qgis_feature(jsonObj)
         elif jsonObj["type"] == "MultiPolygon":
-            print("")
             self.check_multi_polygon(jsonObj["coordinates"])
-            multi = []
-            for poly in jsonObj['coordinates']:
-                qgsPoints = [QgsPointXY(coord[0],coord[1])  for coord in poly[0]]
-                # gPolygon = QgsGeometry.fromPolygonXY([qgsPoints])
-                multi.append([qgsPoints])
-            feat.setGeometry(QgsGeometry.fromMultiPolygonXY(multi))
+            feat = QuickWKT.create_qgis_feature(jsonObj)
+        elif jsonObj["type"] == "GeometryCollection":
+            self.check_geometry_collection(jsonObj)
+            geometryTypeDict = {}
+            for geometry in jsonObj["geometries"]:
+                if(geometry["type"] in ["Point", "LineString", "Polygon", "MultiPoint","MultiLineString","MultiPolygon"]):
+                    if(geometry["type"] in geometryTypeDict):
+                        geometryTypeDict[geometry["type"]].append(geometry)
+                    else:
+                        geometryTypeDict.update({geometry["type"]: [geometry]})
 
+            for [type, arr] in geometryTypeDict.items(): 
+                layer = self.createLayer(type, layerTitle)
+                features = [QuickWKT.create_qgis_feature(geometry) for geometry in arr]
+                layer.dataProvider().addFeatures(features)
+                layer.updateExtents()
+                layer.reload()
+            return
+        elif jsonObj["type"] == "FeatureCollection":
+            self.check_feature_collection(jsonObj)
+            geometryTypeDict = {}
+            for feature in jsonObj["features"]:
+                geometry = feature["geometry"]
+                if(geometry["type"] in ["Point", "LineString", "Polygon", "MultiPoint","MultiLineString","MultiPolygon"]):
+                    if(geometry["type"] in geometryTypeDict):
+                        geometryTypeDict[geometry["type"]].append(geometry)
+                    else:
+                        geometryTypeDict.update({geometry["type"]: [geometry]})
+
+            for [type, arr] in geometryTypeDict.items(): 
+                layer = self.createLayer(type, layerTitle)
+                features = [QuickWKT.create_qgis_feature(geometry) for geometry in arr]
+                layer.dataProvider().addFeatures(features)
+                layer.updateExtents()
+                layer.reload()
+            return
 
         layer = self.createLayer(jsonObj["type"], layerTitle)
         layer.dataProvider().addFeatures([feat])
         layer.updateExtents()
         layer.reload()
             
-    
+
 
     def save_geometry(self, geometry, layerTitle=None):
         """Shows the QgsGeometry in the map canvas, optionally specify a
@@ -337,6 +368,37 @@ class QuickWKT(object):
             print("Error: this is not an instance of QgsGeometry")
             return None
 
+
+    @staticmethod
+    def create_qgis_feature(geometry):
+        feat = QgsFeature()
+        if(geometry["type"] == "Polygon"):
+            qgsPoints = [[QgsPointXY(coord[0],coord[1])  for coord in ring] for ring in geometry['coordinates']]
+            gPolygon = QgsGeometry.fromPolygonXY(qgsPoints)
+            feat.setGeometry(gPolygon)
+        elif(geometry["type"] == "LineString"):
+            qgsPoints = [QgsPoint(coord[0], coord[1]) for coord in geometry["coordinates"]]
+            gLine = QgsGeometry.fromPolyline(qgsPoints)
+            feat.setGeometry(gLine)
+        elif(geometry["type"] == "MultiLineString"):
+            multi = []
+            for line in geometry['coordinates']:
+                qgsPoints = [QgsPointXY(coord[0],coord[1])  for coord in line]
+                
+                multi.append(qgsPoints)
+            feat.setGeometry(QgsGeometry.fromMultiPolylineXY(multi))
+        elif(geometry["type"] == "Point"):
+            gPnt = QgsGeometry.fromPointXY(QgsPointXY(geometry["coordinates"][0],geometry["coordinates"][1]))
+            feat.setGeometry(gPnt)
+        elif(geometry["type"] == "MultiPolygon"):
+            multi = []
+            for poly in geometry['coordinates']:
+                qgsPoints = [QgsPointXY(coord[0],coord[1])  for coord in poly[0]]
+                multi.append([qgsPoints])
+            feat.setGeometry(QgsGeometry.fromMultiPolygonXY(multi))
+        else:
+            return None
+        return feat
     @staticmethod   
     def check_point(coord):
         if not isinstance(coord, list):
@@ -358,6 +420,13 @@ class QuickWKT(object):
             error = QuickWKT.check_point(pos)
             if error:
                  raise Exception( error)
+
+    @staticmethod
+    def check_multi_line_string(coord):
+        if not isinstance(coord, list):
+           raise Exception('MultiLineStrings must be a list of lineStrings')
+        for elem in coord:
+            QuickWKT.check_line_string(elem) 
 
     @staticmethod   
     def check_polygon(coord):
@@ -382,6 +451,48 @@ class QuickWKT(object):
 
         for elem in coord:
             QuickWKT.check_polygon(elem) 
+
+    @staticmethod
+    def check_geometry_collection(geometryCollection):
+        if not "geometries" in geometryCollection:
+           raise Exception('Geometry collection must contain a geometries list')
+
+        if not isinstance(geometryCollection["geometries"], list):
+           raise Exception('Geometry collection geometries must be a list')
+
+        for geometry in geometryCollection["geometries"]:
+            if(geometry["type"] == "Polygon"):
+                QuickWKT.check_polygon(geometry["coordinates"]) 
+            elif(geometry["type"] == "LineString"):
+                QuickWKT.check_line_string(geometry["coordinates"])
+            elif(geometry["type"] == "Point"):
+                QuickWKT.check_point(geometry["coordinates"]) 
+            elif(geometry["type"] == "MultiPolygon"):
+                QuickWKT.check_multi_polygon(geometry["coordinates"])
+            else:
+                raise Exception('Geometry collection geometries contains unsupported geometry'+geometry["type"])
+    @staticmethod
+    def check_feature_collection(featureCollection):
+        if not "features" in featureCollection:
+           raise Exception('Feature collection must contain a features list')
+
+        if not isinstance(featureCollection["features"], list):
+           raise Exception('Feature collection features must be a list')
+
+        for feature in featureCollection["features"]:
+            if not "type" in feature or feature["type"] != "Feature":
+                raise Exception('Feature collection doesnt contain a valid feature')
+            geometry = feature["geometry"]
+            if(geometry["type"] == "Polygon"):
+                QuickWKT.check_polygon(geometry["coordinates"]) 
+            elif(geometry["type"] == "LineString"):
+                QuickWKT.check_line_string(geometry["coordinates"])
+            elif(geometry["type"] == "Point"):
+                QuickWKT.check_point(geometry["coordinates"]) 
+            elif(geometry["type"] == "MultiPolygon"):
+                QuickWKT.check_multi_polygon(geometry["coordinates"])
+            else:
+                raise Exception('Geometry collection geometries contains unsupported geometry'+geometry["type"])
 
     def getLayer(self, layerId):
         for layer in list(QgsProject.instance().mapLayers().values()):
